@@ -14,9 +14,9 @@ export function formatMoney(amount, currency = "IDR") {
   return moneyFormatters.get(code).format(amount);
 }
 
-export function formatDelta(delta) {
-  if (!Number.isFinite(delta)) return "No change";
-  if (Math.abs(delta) < 0.1) return "Flat";
+export function formatDelta(delta, t) {
+  if (!Number.isFinite(delta)) return t?.noChange ?? "No change";
+  if (Math.abs(delta) < 0.1) return t?.flat ?? "Flat";
   return `${delta > 0 ? "+" : ""}${delta.toFixed(1)}%`;
 }
 

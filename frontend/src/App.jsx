@@ -8,29 +8,30 @@ import {
   CreditCard,
   Inbox,
   Landmark,
-  LogOut,
-  Mail,
   PieChart,
-  RefreshCw,
   Search,
-  ShieldCheck,
   WalletCards,
 } from "lucide-react";
 
 import { AccountBars } from "./components/AccountBars";
 import { DonutChart, TrendChart } from "./components/Charts";
 import { InboxList } from "./components/InboxList";
+import { LoginPage } from "./components/LoginPage";
 import { Metric } from "./components/Metric";
 import { Panel } from "./components/Panel";
+import { ProfileSettings } from "./components/ProfileSettings";
 import { SubscriptionGrid } from "./components/SubscriptionGrid";
 import { TransactionTable } from "./components/TransactionTable";
+import { UserMenu } from "./components/UserMenu";
 import { GOOGLE_CLIENT_ID } from "./config";
 import logoUrl from "./assets/finance-radar-logo-cropped.png";
 import { apiFetch } from "./services/api";
 import { fetchGoogleProfile, requestGoogleAccessToken } from "./services/googleAuth";
+import { loadProfile, saveProfile } from "./services/profileStorage";
 import { currentMonth, recentMonths, shiftMonth } from "./utils/dates";
 import { dominantCurrency, latestSubscriptions, sum, totalsBy } from "./utils/dashboard";
 import { formatAiName, formatDelta, formatMoney } from "./utils/formatters";
+import { getTranslations } from "./utils/i18n";
 
 export default function App() {
   const [selectedMonth, setSelectedMonth] = useState(currentMonth());
@@ -48,7 +49,13 @@ export default function App() {
   const [trendByMonth, setTrendByMonth] = useState(new Map());
   const [inboxFinanceOnly, setInboxFinanceOnly] = useState(false);
   const [aiConfig, setAiConfig] = useState({ aiProvider: "ai", aiModel: "" });
+  const [profile, setProfile] = useState(() => loadProfile());
+  const [googleUser, setGoogleUser] = useState({ name: "", picture: "" });
+  const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
+  const [toast, setToast] = useState(null);
 
+  const t = getTranslations(profile.language);
+  const isAuthenticated = Boolean(accessToken && signedInEmail);
   const months = useMemo(() => recentMonths(18), []);
   const monthly = useMemo(
     () => transactions.filter((item) => item.date.startsWith(selectedMonth)),
@@ -69,7 +76,7 @@ export default function App() {
     return inboxMessages.filter((row) => emailAnalyses.get(row.id)?.isFinance);
   }, [inboxMessages, emailAnalyses, inboxFinanceOnly]);
 
-  const displayCurrency = dominantCurrency(transactions);
+  const displayCurrency = profile.currency || dominantCurrency(transactions);
   const total = sum(monthly);
   const previousTotal = sum(previous);
   const delta = previousTotal ? ((total - previousTotal) / previousTotal) * 100 : 0;
@@ -84,12 +91,20 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    loadDashboard(selectedMonth);
-  }, [selectedMonth]);
+    if (isAuthenticated) loadDashboard(selectedMonth);
+  }, [selectedMonth, isAuthenticated]);
 
   useEffect(() => {
-    loadSpendingTrend();
-  }, []);
+    if (isAuthenticated) loadSpendingTrend();
+  }, [isAuthenticated]);
+
+  useEffect(() => {
+    if (!isAuthenticated || !scanState) return undefined;
+    const message = formatToastMessage(scanState);
+    setToast({ message, type: getToastType(scanState) });
+    const timer = window.setTimeout(() => setToast(null), 5000);
+    return () => window.clearTimeout(timer);
+  }, [scanState, isAuthenticated]);
 
   async function loadDashboard(month) {
     setIsLoading(true);
@@ -98,11 +113,7 @@ export default function App() {
       const data = await response.json();
       applyDashboardData(data);
       const count = (data.transactions ?? []).length;
-      setScanState(
-        count > 0
-          ? `${month}: showing ${count} saved transaction${count === 1 ? "" : "s"} from database`
-          : `${month}: no saved data yet - connect Gmail and click Analyze inbox`,
-      );
+      setScanState(count > 0 ? t.showingSavedTransactions(month, count) : t.noSavedData(month));
     } catch (error) {
       setScanState(error.message || "Could not load dashboard data");
     } finally {
@@ -126,15 +137,19 @@ export default function App() {
 
   async function connectGmail() {
     setIsLoading(true);
-    setScanState("Requesting Google Gmail access...");
+    setScanState(t.requestingGmailAccess);
     try {
       const token = await requestGoogleAccessToken();
-      const profile = await fetchGoogleProfile(token).catch(() => ({}));
+      const googleProfile = await fetchGoogleProfile(token).catch(() => ({}));
+      const email = googleProfile.email ?? "";
       setAccessToken(token);
-      setSignedInEmail(profile.email ?? "");
-      setScanState("Gmail connected. Click Analyze inbox when you want to fetch and classify emails.");
+      setSignedInEmail(email);
+      setGoogleUser({ name: googleProfile.name ?? "", picture: googleProfile.picture ?? "" });
+      const savedProfile = loadProfile();
+      setProfile(savedProfile);
+      setScanState(getTranslations(savedProfile.language).gmailConnected);
     } catch (error) {
-      setScanState(error.message || "Gmail connection failed");
+      setScanState(error.message || t.gmailConnectionFailed);
     } finally {
       setIsLoading(false);
     }
@@ -142,11 +157,11 @@ export default function App() {
 
   async function analyzeInbox(month = selectedMonth) {
     if (!accessToken) {
-      setScanState("Connect Gmail first, then click Analyze inbox.");
+      setScanState(t.connectGmailFirst);
       return;
     }
     setIsAnalyzing(true);
-    setScanState(`Analyzing ${month} Gmail with ${aiName}...`);
+    setScanState(t.analyzingInbox(month, aiName));
     try {
       const response = await apiFetch("/api/read-inbox", {
         method: "POST",
@@ -157,9 +172,9 @@ export default function App() {
       applyDashboardData(data);
       await loadSpendingTrend();
       const count = (data.transactions ?? []).length;
-      setScanState(`${month}: analyzed and saved ${count} transaction${count === 1 ? "" : "s"}`);
+      setScanState(t.analyzedSaved(month, count));
     } catch (error) {
-      setScanState(error.message || "Inbox analysis failed");
+      setScanState(error.message || t.inboxAnalysisFailed);
     } finally {
       setIsAnalyzing(false);
     }
@@ -171,10 +186,15 @@ export default function App() {
     }
     setAccessToken("");
     setSignedInEmail("");
+    setGoogleUser({ name: "", picture: "" });
+    setIsUserMenuOpen(false);
+    setProfile(loadProfile());
+    setInboxMessages([]);
+    setEmailAnalyses(new Map());
+    setTransactions([]);
+    setTrendByMonth(new Map());
     setQuery("");
-    setScanState("Signed out. Showing saved database data.");
-    loadDashboard(selectedMonth);
-    loadSpendingTrend();
+    setScanState(GOOGLE_CLIENT_ID ? t.dashboardLoginMessage : t.serviceNotice);
   }
 
   function changeMonth(month) {
@@ -191,6 +211,25 @@ export default function App() {
     if (data.email) setSignedInEmail(data.email);
   }
 
+  function updateProfile(nextProfile) {
+    setProfile(nextProfile);
+    saveProfile(nextProfile);
+  }
+
+  function analyzeFromMenu() {
+    setIsUserMenuOpen(false);
+    analyzeInbox();
+  }
+
+  function logoutFromMenu() {
+    setIsUserMenuOpen(false);
+    logout();
+  }
+
+  if (!isAuthenticated) {
+    return <LoginPage isLoading={isLoading} message={scanState} onLogin={connectGmail} t={t} />;
+  }
+
   return (
     <div className="app">
       <aside className="rail">
@@ -199,43 +238,51 @@ export default function App() {
         </div>
 
         <nav>
-          <a href="#overview" className="active"><PieChart size={18} /> Overview</a>
-          <a href="#accounts"><WalletCards size={18} /> Accounts</a>
-          <a href="#subscriptions"><Bell size={18} /> Subscriptions</a>
-          <a href="#transactions"><Inbox size={18} /> Inbox ledger</a>
+          <a href="#overview" className="active"><PieChart size={18} /> {t.overview}</a>
+          <a href="#accounts"><WalletCards size={18} /> {t.account}</a>
+          <a href="#subscriptions"><Bell size={18} /> {t.subscriptions}</a>
+          <a href="#transactions"><Inbox size={18} /> {t.inboxLedger}</a>
         </nav>
-
-        <section className="email-card">
-          <div className="email-icon"><Inbox size={20} /></div>
-          <h2>{signedInEmail ? "Connected Gmail" : "Inbox sync"}</h2>
-          {signedInEmail ? (
-            <>
-              <p className="connected-email"><Mail size={15} /> {signedInEmail}</p>
-              <button type="button" onClick={() => analyzeInbox()} disabled={isAnalyzing || isLoading}>
-                <RefreshCw size={17} /> {isAnalyzing ? "Analyzing..." : "Analyze inbox"}
-              </button>
-              <button className="secondary-button" type="button" onClick={logout} disabled={isAnalyzing}>
-                <LogOut size={17} /> Sign out
-              </button>
-            </>
-          ) : (
-            <div className="login-form">
-              <p>Connect Gmail to analyze new messages. Saved data loads automatically.</p>
-              <button type="button" onClick={connectGmail} disabled={isLoading || isAnalyzing}>
-                <ShieldCheck size={17} /> {isLoading ? "Connecting..." : "Connect Gmail"}
-              </button>
-            </div>
-          )}
-          <small>{scanState}</small>
-        </section>
       </aside>
 
       <main>
+        <header className="topbar">
+          <div className="topbar-left" aria-hidden="true" />
+          <div className="topbar-user">
+            <ProfileSettings
+              profile={profile}
+              onChange={updateProfile}
+              t={t}
+              className="topbar-profile"
+              compact
+            />
+            <UserMenu
+              user={googleUser}
+              email={signedInEmail}
+              isOpen={isUserMenuOpen}
+              isAnalyzing={isAnalyzing}
+              isLoading={isLoading}
+              onToggle={() => setIsUserMenuOpen((open) => !open)}
+              onAnalyze={analyzeFromMenu}
+              onLogout={logoutFromMenu}
+              t={t}
+            />
+          </div>
+        </header>
+        {toast && (
+          <div className={`toast toast-${toast.type}`} role="status" aria-live="polite">
+            <span>{toast.message}</span>
+            <button type="button" onClick={() => setToast(null)} aria-label="Close notification">
+              &times;
+            </button>
+          </div>
+        )}
+
         <header className="hero">
           <div>
-            <span className="kicker">Live Gmail connection</span>
-            <h1>{signedInEmail ? "Know where your money goes before the month ends." : "Connect Gmail to chart bank and card activity."}</h1>
-            <p>{signedInEmail ? "Track income and payments by detected bank accounts, cards, and wallets from Gmail financial alerts." : "Authorize read-only Gmail access, scan recent finance emails, then use AI to classify income, spending, and payment direction."}</p>
+            <span className="kicker">{t.liveGmailConnection}</span>
+            <h1>{signedInEmail ? t.heroTitle : t.connectGmail}</h1>
+            <p>{signedInEmail ? t.trackFinance : t.authorizeGmail}</p>
           </div>
           <div className="month-switcher" aria-label="Month selector">
             <button disabled={selectedIndex <= 0 || isLoading} onClick={() => changeMonth(months[selectedIndex - 1])} aria-label="Previous month">
@@ -248,7 +295,7 @@ export default function App() {
                 value={selectedMonth}
                 onChange={(event) => changeMonth(event.target.value)}
                 disabled={isLoading}
-                aria-label="Email month"
+                aria-label={t.emailMonth}
               />
             </label>
             <button disabled={selectedIndex === months.length - 1 || isLoading} onClick={() => changeMonth(months[selectedIndex + 1])} aria-label="Next month">
@@ -258,34 +305,34 @@ export default function App() {
         </header>
 
         <section id="overview" className="metrics">
-          <Metric title="Monthly spending" value={formatMoney(sum(monthly.filter((item) => item.direction === "spending" || item.direction === "fee")), displayCurrency)} note={`${formatDelta(delta)} total flow vs previous month`} icon={<ArrowDownRight size={20} />} />
-          <Metric title="Monthly income" value={formatMoney(sum(monthly.filter((item) => item.direction === "income" || item.direction === "refund")), displayCurrency)} note={`${monthly.filter((item) => item.direction === "income").length} incoming payments`} icon={<Landmark size={20} />} />
-          <Metric title="Subscription run-rate" value={formatMoney(sum(monthly.filter((item) => item.recurring)), displayCurrency)} note={`${monthly.filter((item) => item.recurring).length} recurring charges`} icon={<Bell size={20} />} />
-          <Metric title="Top account" value={accounts[0]?.name ?? "No data"} note={accounts[0] ? formatMoney(accounts[0].total, displayCurrency) : "Read inbox"} icon={<CreditCard size={20} />} />
+          <Metric title={t.monthlySpending} value={formatMoney(sum(monthly.filter((item) => item.direction === "spending" || item.direction === "fee")), displayCurrency)} note={t.totalFlowVsPreviousMonth(formatDelta(delta, t))} icon={<ArrowDownRight size={20} />} />
+          <Metric title={t.monthlyIncome} value={formatMoney(sum(monthly.filter((item) => item.direction === "income" || item.direction === "refund")), displayCurrency)} note={t.incomingPayments(monthly.filter((item) => item.direction === "income").length)} icon={<Landmark size={20} />} />
+          <Metric title={t.subscriptionRunRate} value={formatMoney(sum(monthly.filter((item) => item.recurring)), displayCurrency)} note={t.recurringCharges(monthly.filter((item) => item.recurring).length)} icon={<Bell size={20} />} />
+          <Metric title={t.topAccount} value={accounts[0]?.name ?? t.noData} note={accounts[0] ? formatMoney(accounts[0].total, displayCurrency) : t.readInbox} icon={<CreditCard size={20} />} />
         </section>
 
         <section className="layout-grid">
-          <Panel className="span-8" title="Spending trend" subtitle="Monthly spending totals from saved transactions in the database.">
-            <TrendChart months={months} trendByMonth={trendByMonth} selectedMonth={selectedMonth} currency={displayCurrency} />
+          <Panel className="span-8" title={t.spendingTrend} subtitle={t.spendingTrendSubtitle}>
+            <TrendChart months={months} trendByMonth={trendByMonth} selectedMonth={selectedMonth} currency={displayCurrency} t={t} />
           </Panel>
-          <Panel id="accounts" className="span-4" title="Payment accounts" subtitle="Cards, wallets, and banks detected this month.">
+          <Panel id="accounts" className="span-4" title={t.paymentAccounts} subtitle={t.paymentAccountsSubtitle}>
             <AccountBars rows={accounts} total={total} currency={displayCurrency} />
           </Panel>
-          <Panel className="span-4" title="Category mix" subtitle="Current month distribution.">
-            <DonutChart rows={categories} total={total} currency={displayCurrency} />
+          <Panel className="span-4" title={t.categoryMix} subtitle={t.categoryMixSubtitle}>
+            <DonutChart rows={categories} total={total} currency={displayCurrency} t={t} />
           </Panel>
-          <Panel id="subscriptions" className="span-8" title="Subscriptions" subtitle="Latest recurring charges detected in Gmail.">
-            <SubscriptionGrid rows={subscriptions} currency={displayCurrency} />
+          <Panel id="subscriptions" className="span-8" title={t.subscriptions} subtitle={t.subscriptionsSubtitle}>
+            <SubscriptionGrid rows={subscriptions} currency={displayCurrency} t={t} />
           </Panel>
           <Panel
             className="span-12"
-            title="Read emails"
+            title={t.readEmails}
             subtitle={
               signedInEmail
                 ? inboxFinanceOnly
-                  ? `${filteredInbox.length} finance messages of ${inboxMessages.length} read for ${selectedMonth}.`
-                  : `${inboxMessages.length} messages read for ${selectedMonth} from ${signedInEmail}.`
-                : "Connect Gmail to read messages."
+                  ? t.financeMessagesOf(filteredInbox.length, inboxMessages.length, selectedMonth)
+                  : t.gmailReadMessages(inboxMessages.length, selectedMonth, signedInEmail)
+                : t.unreadInbox
             }
           >
             <div className="inbox-toolbar">
@@ -296,7 +343,7 @@ export default function App() {
                   onClick={() => setInboxFinanceOnly(false)}
                   aria-pressed={!inboxFinanceOnly}
                 >
-                  All emails
+                  {t.allEmails}
                 </button>
                 <button
                   type="button"
@@ -304,23 +351,34 @@ export default function App() {
                   onClick={() => setInboxFinanceOnly(true)}
                   aria-pressed={inboxFinanceOnly}
                 >
-                  Finance emails
+                  {t.financeEmails}
                 </button>
               </div>
             </div>
-            <InboxList rows={filteredInbox} analyses={emailAnalyses} financeOnly={inboxFinanceOnly} />
+            <InboxList rows={filteredInbox} analyses={emailAnalyses} financeOnly={inboxFinanceOnly} t={t} />
           </Panel>
-          <Panel id="transactions" className="span-12" title="Account ledger" subtitle="Transactions parsed only when a bank, card, or wallet signal is detected.">
+          <Panel id="transactions" className="span-12" title={t.accountLedger} subtitle={t.accountLedgerSubtitle}>
             <div className="toolbar">
               <label className="search-box">
                 <Search size={18} />
-                <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search merchant, account, category" />
+                <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t.searchPlaceholder} />
               </label>
             </div>
-            <TransactionTable rows={filtered} currency={displayCurrency} />
+            <TransactionTable rows={filtered} currency={displayCurrency} t={t} />
           </Panel>
         </section>
       </main>
     </div>
   );
+}
+
+function getToastType(message) {
+  return /error|failed|could not|does not exist/i.test(message) ? "error" : "status";
+}
+
+function formatToastMessage(message) {
+  if (/relation "emails" does not exist/i.test(message)) {
+    return "Database is not ready. Please create the email tables, then refresh the dashboard.";
+  }
+  return message;
 }

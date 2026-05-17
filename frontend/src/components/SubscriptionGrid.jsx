@@ -2,13 +2,13 @@ import { Bell } from "lucide-react";
 
 import { formatMoney } from "../utils/formatters";
 
-export function SubscriptionGrid({ rows, currency = "IDR" }) {
+export function SubscriptionGrid({ rows, currency = "IDR", t }) {
   if (!rows.length) {
     return (
       <div className="empty-state compact">
         <Bell size={22} />
-        <strong>No subscriptions detected</strong>
-        <span>Recurring charges appear here after Gmail messages are parsed.</span>
+        <strong>{t.noSubscriptionsDetected}</strong>
+        <span>{t.subscriptionsEmpty}</span>
       </div>
     );
   }
@@ -25,9 +25,9 @@ export function SubscriptionGrid({ rows, currency = "IDR" }) {
             <b>{formatMoney(row.amount, row.currency ?? currency)}</b>
           </header>
           <dl>
-            <dt>Account</dt><dd>{row.account}</dd>
-            <dt>Renews</dt><dd>{row.nextRenewal ?? "Detected"}</dd>
-            <dt>Email</dt><dd>{row.source}</dd>
+            <dt>{t.account}</dt><dd>{row.account}</dd>
+            <dt>{t.renews}</dt><dd>{row.nextRenewal ?? t.detected}</dd>
+            <dt>{t.email}</dt><dd>{row.source}</dd>
           </dl>
         </article>
       ))}
