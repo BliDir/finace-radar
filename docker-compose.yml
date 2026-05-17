@@ -1,0 +1,54 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: finance_radar
+      POSTGRES_USER: finance
+      POSTGRES_PASSWORD: finance
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./backend/db/init.sql:/docker-entrypoint-initdb.d/001-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U finance -d finance_radar"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+    env_file:
+      - ./backend/.env
+    environment:
+      HOST: 0.0.0.0
+      PORT: 4000
+      DATABASE_URL: postgres://finance:finance@postgres:5432/finance_radar
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      RUST_LOG: ${RUST_LOG:-info}
+    ports:
+      - "4000:4000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+    env_file:
+      - ./frontend/.env
+    environment:
+      HOST: 0.0.0.0
+      PORT: 5175
+      VITE_API_BASE_URL: http://127.0.0.1:4000
+      VITE_HMR_HOST: 127.0.0.1
+      VITE_HMR_PORT: 24679
+    ports:
+      - "5175:5175"
+      - "24679:24679"
+    depends_on:
+      - backend
+
+volumes:
+  postgres-data:
