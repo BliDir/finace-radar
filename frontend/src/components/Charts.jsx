@@ -1,7 +1,7 @@
 import { chartPalette } from "../config";
 import { formatMoney } from "../utils/formatters";
 
-export function TrendChart({ months, trendByMonth, selectedMonth, currency = "IDR" }) {
+export function TrendChart({ months, trendByMonth, selectedMonth, currency = "IDR", t }) {
   const width = 820;
   const height = 270;
   const pad = 34;
@@ -16,7 +16,7 @@ export function TrendChart({ months, trendByMonth, selectedMonth, currency = "ID
   const area = `${pad},${height - pad} ${line} ${width - pad},${height - pad}`;
 
   return (
-    <svg className="chart" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Expense trend">
+    <svg className="chart" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={t.chartExpenseTrend}>
       <defs>
         <linearGradient id="trendFill" x1="0" x2="0" y1="0" y2="1">
           <stop offset="0%" stopColor="#0f9f94" stopOpacity="0.22" />
@@ -39,7 +39,7 @@ export function TrendChart({ months, trendByMonth, selectedMonth, currency = "ID
   );
 }
 
-export function DonutChart({ rows, total, currency = "IDR" }) {
+export function DonutChart({ rows, total, currency = "IDR", t }) {
   let offset = 25;
   return (
     <div className="donut-wrap">
@@ -64,7 +64,7 @@ export function DonutChart({ rows, total, currency = "IDR" }) {
           offset -= part;
           return circle;
         })}
-        <text x="110" y="104" textAnchor="middle" className="donut-label">Total</text>
+        <text x="110" y="104" textAnchor="middle" className="donut-label">{t.total}</text>
         <text x="110" y="130" textAnchor="middle" className="donut-total">{formatMoney(total, currency)}</text>
       </svg>
       <div className="legend">
